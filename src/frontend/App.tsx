@@ -23,6 +23,37 @@ type Recipe = {
   verkaufspreis_netto?: number | null;
 };
 
+type RecipeLine = {
+  id: string;
+  rezeptId: string;
+  zutatId?: string | null;
+  unterrezeptId?: string | null;
+  menge: number;
+  verschnitt_pct: number;
+  garverlust_pct: number;
+  schwund_pct: number;
+};
+
+type RecipeWorkEntry = {
+  id: string;
+  rezeptId: string;
+  personalkategorie_id: string;
+  vorbereitung_min: number;
+  produktion_min: number;
+  anrichten_min: number;
+  batch_groesse: number;
+};
+
+type RecipeDetail = {
+  id: string;
+  name: string;
+  portionsgroesse: number;
+  ist_unterrezept: boolean;
+  verkaufspreis_netto?: number | null;
+  ingredients: RecipeLine[];
+  arbeitszeit: RecipeWorkEntry[];
+};
+
 type FixedCost = {
   id: string;
   kategorie: string;
@@ -178,10 +209,48 @@ export default function App() {
     wert: '35',
   });
 
+  const [selectedRecipeDetail, setSelectedRecipeDetail] = useState<RecipeDetail | null>(null);
+  const [recipeLineForm, setRecipeLineForm] = useState({
+    targetType: 'zutat' as 'zutat' | 'unterrezept',
+    targetId: '',
+    menge: '1',
+    verschnitt_pct: '0',
+    garverlust_pct: '0',
+    schwund_pct: '0',
+  });
+  const [workEntryForm, setWorkEntryForm] = useState({
+    personalkategorie_id: '',
+    vorbereitung_min: '0',
+    produktion_min: '0',
+    anrichten_min: '0',
+    batch_groesse: '1',
+  });
+
   const selectedRecipe = useMemo(
     () => recipes.find((recipe) => recipe.id === selectedRecipeId) ?? null,
     [recipes, selectedRecipeId],
   );
+
+  const recipeLineTargets = useMemo(
+    () =>
+      recipeLineForm.targetType === 'zutat'
+        ? ingredients.map((ingredient) => ({ id: ingredient.id, label: ingredient.name }))
+        : recipes
+            .filter((recipe) => recipe.id !== selectedRecipeId)
+            .map((recipe) => ({ id: recipe.id, label: recipe.name })),
+    [ingredients, recipeLineForm.targetType, recipes, selectedRecipeId],
+  );
+
+  const fetchRecipeDetail = async (recipeId: string) => {
+    const response = await apiFetch<{ recipe: RecipeDetail }>(`/rezepte/${recipeId}`);
+    setSelectedRecipeDetail(response.recipe);
+    if (!response.recipe?.arbeitszeit?.length && laborCategories.length) {
+      setWorkEntryForm((current) => ({
+        ...current,
+        personalkategorie_id: current.personalkategorie_id || laborCategories[0].id,
+      }));
+    }
+  };
 
   const fetchSessionData = async () => {
     const [ingredientData, recipeData, fixedCostData, salesData, laborData, taxData, channelData, goalData] =
@@ -262,6 +331,23 @@ export default function App() {
 
     void initialize();
   }, [token]);
+
+  useEffect(() => {
+    if (!selectedRecipeId || !token) {
+      setSelectedRecipeDetail(null);
+      return;
+    }
+
+    const loadDetail = async () => {
+      try {
+        await fetchRecipeDetail(selectedRecipeId);
+      } catch (detailError) {
+        setError(detailError instanceof Error ? detailError.message : 'Rezeptdetails konnten nicht geladen werden.');
+      }
+    };
+
+    void loadDetail();
+  }, [selectedRecipeId, token, laborCategories.length]);
 
   useEffect(() => {
     if (!selectedRecipeId || !token) {
@@ -559,6 +645,97 @@ export default function App() {
     }
   };
 
+  const refreshSelectedRecipe = async () => {
+    if (!selectedRecipeId) {
+      return;
+    }
+
+    await fetchRecipeDetail(selectedRecipeId);
+    await fetchCalculation(selectedRecipeId);
+  };
+
+  const handleRecipeLineSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedRecipeId) {
+      return;
+    }
+
+    setError('');
+
+    try {
+      await apiFetch(`/rezepte/${selectedRecipeId}/zutaten`, {
+        method: 'POST',
+        body: JSON.stringify({
+          zutatId: recipeLineForm.targetType === 'zutat' ? recipeLineForm.targetId : undefined,
+          unterrezeptId: recipeLineForm.targetType === 'unterrezept' ? recipeLineForm.targetId : undefined,
+          menge: Number(recipeLineForm.menge),
+          verschnitt_pct: Number(recipeLineForm.verschnitt_pct),
+          garverlust_pct: Number(recipeLineForm.garverlust_pct),
+          schwund_pct: Number(recipeLineForm.schwund_pct),
+        }),
+      });
+
+      setRecipeLineForm({
+        targetType: 'zutat',
+        targetId: '',
+        menge: '1',
+        verschnitt_pct: '0',
+        garverlust_pct: '0',
+        schwund_pct: '0',
+      });
+      await refreshSelectedRecipe();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Rezeptbestandteil konnte nicht gespeichert werden.');
+    }
+  };
+
+  const handleDeleteRecipeLine = async (lineId: string) => {
+    if (!selectedRecipeId) {
+      return;
+    }
+
+    try {
+      setError('');
+      await apiFetch(`/rezepte/${selectedRecipeId}/zutaten/${lineId}`, { method: 'DELETE' });
+      await refreshSelectedRecipe();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Rezeptbestandteil konnte nicht gelöscht werden.');
+    }
+  };
+
+  const handleWorkEntrySubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedRecipeId) {
+      return;
+    }
+
+    setError('');
+
+    try {
+      await apiFetch(`/rezepte/${selectedRecipeId}/arbeitszeit`, {
+        method: 'POST',
+        body: JSON.stringify({
+          personalkategorie_id: workEntryForm.personalkategorie_id,
+          vorbereitung_min: Number(workEntryForm.vorbereitung_min),
+          produktion_min: Number(workEntryForm.produktion_min),
+          anrichten_min: Number(workEntryForm.anrichten_min),
+          batch_groesse: Number(workEntryForm.batch_groesse),
+        }),
+      });
+
+      setWorkEntryForm({
+        personalkategorie_id: laborCategories[0]?.id ?? '',
+        vorbereitung_min: '0',
+        produktion_min: '0',
+        anrichten_min: '0',
+        batch_groesse: '1',
+      });
+      await refreshSelectedRecipe();
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Arbeitszeit konnte nicht gespeichert werden.');
+    }
+  };
+
   const handleLogout = () => {
     localStorage.removeItem('kalkulino_token');
     setToken(null);
@@ -572,6 +749,7 @@ export default function App() {
     setSalesChannels([]);
     setGoal(null);
     setSelectedRecipeId('');
+    setSelectedRecipeDetail(null);
     setCalculation(null);
   };
 
@@ -689,6 +867,190 @@ export default function App() {
                   <h3>{selectedRecipe.name}</h3>
                 </div>
                 <span className="badge">{selectedRecipe.portionsgroesse} Portionen</span>
+              </div>
+
+              <div className="detail-stack">
+                <div className="detail-panel">
+                  <h4>Rezeptbestandteile</h4>
+                  <form onSubmit={handleRecipeLineSubmit} className="form-stack compact-form">
+                    <div className="two-col">
+                      <label>
+                        Typ
+                        <select
+                          value={recipeLineForm.targetType}
+                          onChange={(event) =>
+                            setRecipeLineForm((current) => ({
+                              ...current,
+                              targetType: event.target.value as 'zutat' | 'unterrezept',
+                              targetId: '',
+                            }))
+                          }
+                        >
+                          <option value="zutat">Zutat</option>
+                          <option value="unterrezept">Unterrezept</option>
+                        </select>
+                      </label>
+                      <label>
+                        {recipeLineForm.targetType === 'zutat' ? 'Zutat' : 'Unterrezept'}
+                        <select
+                          value={recipeLineForm.targetId}
+                          onChange={(event) => setRecipeLineForm((current) => ({ ...current, targetId: event.target.value }))}
+                          required
+                        >
+                          <option value="">Bitte wählen</option>
+                          {recipeLineTargets.map((target) => (
+                            <option key={target.id} value={target.id}>
+                              {target.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    <div className="two-col">
+                      <label>
+                        Menge
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={recipeLineForm.menge}
+                          onChange={(event) => setRecipeLineForm((current) => ({ ...current, menge: event.target.value }))}
+                          required
+                        />
+                      </label>
+                      <label>
+                        Verschnitt %
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={recipeLineForm.verschnitt_pct}
+                          onChange={(event) => setRecipeLineForm((current) => ({ ...current, verschnitt_pct: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="two-col">
+                      <label>
+                        Garverlust %
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={recipeLineForm.garverlust_pct}
+                          onChange={(event) => setRecipeLineForm((current) => ({ ...current, garverlust_pct: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Schwund %
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={recipeLineForm.schwund_pct}
+                          onChange={(event) => setRecipeLineForm((current) => ({ ...current, schwund_pct: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <button type="submit" className="primary-button small-button">
+                      Hinzufügen
+                    </button>
+                  </form>
+
+                  <div className="list-stack compact">
+                    {(selectedRecipeDetail?.ingredients ?? []).map((line) => {
+                      const label = line.zutatId
+                        ? ingredients.find((ingredient) => ingredient.id === line.zutatId)?.name ?? 'Zutat'
+                        : recipes.find((recipe) => recipe.id === line.unterrezeptId)?.name ?? 'Unterrezept';
+
+                      return (
+                        <div key={line.id} className="list-item-row">
+                          <div>
+                            <strong>{label}</strong>
+                            <small>
+                              {line.menge} · Verschnitt {line.verschnitt_pct}% · Garverlust {line.garverlust_pct}% · Schwund {line.schwund_pct}%
+                            </small>
+                          </div>
+                          <button type="button" className="danger-button" onClick={() => handleDeleteRecipeLine(line.id)}>
+                            Entfernen
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="detail-panel">
+                  <h4>Arbeitszeit</h4>
+                  <form onSubmit={handleWorkEntrySubmit} className="form-stack compact-form">
+                    <label>
+                      Personalkategorie
+                      <select
+                        value={workEntryForm.personalkategorie_id}
+                        onChange={(event) => setWorkEntryForm((current) => ({ ...current, personalkategorie_id: event.target.value }))}
+                        required
+                      >
+                        <option value="">Bitte wählen</option>
+                        {laborCategories.map((category) => (
+                          <option key={category.id} value={category.id}>
+                            {category.bezeichnung}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="two-col">
+                      <label>
+                        Vorbereitung min
+                        <input
+                          type="number"
+                          value={workEntryForm.vorbereitung_min}
+                          onChange={(event) => setWorkEntryForm((current) => ({ ...current, vorbereitung_min: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Produktion min
+                        <input
+                          type="number"
+                          value={workEntryForm.produktion_min}
+                          onChange={(event) => setWorkEntryForm((current) => ({ ...current, produktion_min: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="two-col">
+                      <label>
+                        Anrichten min
+                        <input
+                          type="number"
+                          value={workEntryForm.anrichten_min}
+                          onChange={(event) => setWorkEntryForm((current) => ({ ...current, anrichten_min: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Batchgröße
+                        <input
+                          type="number"
+                          value={workEntryForm.batch_groesse}
+                          onChange={(event) => setWorkEntryForm((current) => ({ ...current, batch_groesse: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <button type="submit" className="primary-button small-button">
+                      Hinzufügen
+                    </button>
+                  </form>
+
+                  <div className="list-stack compact">
+                    {(selectedRecipeDetail?.arbeitszeit ?? []).map((entry) => {
+                      const category = laborCategories.find((labour) => labour.id === entry.personalkategorie_id);
+
+                      return (
+                        <div key={entry.id} className="list-item-row">
+                          <div>
+                            <strong>{category?.bezeichnung ?? 'Personalkategorie'}</strong>
+                            <small>
+                              Vor {entry.vorbereitung_min} · Prod {entry.produktion_min} · Anr {entry.anrichten_min} · Batch {entry.batch_groesse}
+                            </small>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
 
               {calculation ? (
