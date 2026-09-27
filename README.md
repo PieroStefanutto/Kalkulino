@@ -34,9 +34,22 @@ This follows the requirement that no query may trust the client to decide the te
 
 ```bash
 npm install
-npm test
+npm.cmd run dev
 ```
+
+This starts:
+
+- the API on http://localhost:3000
+- the frontend on http://localhost:5173
+
+## Frontend
+
+The browser app is based on React + Vite and connects to the same in-memory API used by the backend tests.
+
+- Register or log in with a new tenant
+- View the tenant-scoped ingredient list
+- Select a recipe and inspect the calculation output
 
 ## Notes
 
-The project now includes both the pure backend pricing logic and the auth/tenant layer needed for the MVP foundation.
+The project now includes the pure backend pricing logic, the auth/tenant layer, and a working browser UI for the MVP foundation.
