@@ -71,6 +71,47 @@ export interface RezeptZutatRecord {
   schwund_pct: number;
 }
 
+export interface FixkostenRecord {
+  id: string;
+  betriebId: string;
+  kategorie: string;
+  betrag_monat: number;
+  gueltig_ab: string;
+}
+
+export interface AuslastungRecord {
+  id: string;
+  betriebId: string;
+  monat: string;
+  gaeste?: number | null;
+  verkaufte_speisen?: number | null;
+  oe_bon?: number | null;
+}
+
+export interface SteuersatzRecord {
+  id: string;
+  betriebId: string;
+  bezeichnung: string;
+  satz_pct: number;
+}
+
+export interface VerkaufskanalRecord {
+  id: string;
+  betriebId: string;
+  name: string;
+  provision_pct: number;
+  kartengebuehr_pct: number;
+  verpackungskosten: number;
+  steuersatz_id?: string | null;
+}
+
+export interface ZielRecord {
+  id: string;
+  betriebId: string;
+  ziel_typ: 'db_quote' | 'gewinn_eur';
+  wert: number;
+}
+
 const stores = {
   betriebe: new Map<string, BetriebRecord>(),
   users: new Map<string, UserRecord>(),
@@ -80,6 +121,11 @@ const stores = {
   preishistorie: new Map<string, PreisHistorieRecord[]>(),
   rezepte: new Map<string, RezeptRecord[]>(),
   rezeptZutaten: new Map<string, RezeptZutatRecord[]>(),
+  fixkosten: new Map<string, FixkostenRecord[]>(),
+  auslastung: new Map<string, AuslastungRecord[]>(),
+  steuersaetze: new Map<string, SteuersatzRecord[]>(),
+  verkaufskanaele: new Map<string, VerkaufskanalRecord[]>(),
+  ziel: new Map<string, ZielRecord>(),
 };
 
 const createId = () => crypto.randomUUID();
@@ -155,6 +201,11 @@ export function resetStores(): void {
   stores.preishistorie.clear();
   stores.rezepte.clear();
   stores.rezeptZutaten.clear();
+  stores.fixkosten.clear();
+  stores.auslastung.clear();
+  stores.steuersaetze.clear();
+  stores.verkaufskanaele.clear();
+  stores.ziel.clear();
 }
 
 export function createApp() {
@@ -310,6 +361,131 @@ export function createApp() {
     return res.json({ items });
   });
 
+  app.get('/fixkosten', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = stores.fixkosten.get(req.user!.betriebId) ?? [];
+    return res.json({ items });
+  });
+
+  app.post('/fixkosten', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { kategorie, betrag_monat, gueltig_ab } = req.body ?? {};
+
+    if (!kategorie || betrag_monat === undefined) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Category and monthly amount are required.');
+    }
+
+    const entry: FixkostenRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      kategorie: String(kategorie),
+      betrag_monat: Number(betrag_monat),
+      gueltig_ab: String(gueltig_ab ?? new Date().toISOString().slice(0, 10)),
+    };
+
+    const items = stores.fixkosten.get(req.user!.betriebId) ?? [];
+    stores.fixkosten.set(req.user!.betriebId, [...items, entry]);
+    return res.status(201).json({ item: entry });
+  });
+
+  app.get('/auslastung', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = stores.auslastung.get(req.user!.betriebId) ?? [];
+    return res.json({ items });
+  });
+
+  app.post('/auslastung', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { monat, gaeste, verkaufte_speisen, oe_bon } = req.body ?? {};
+
+    if (!monat) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Month is required.');
+    }
+
+    const entry: AuslastungRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      monat: String(monat),
+      gaeste: gaeste === undefined ? null : Number(gaeste),
+      verkaufte_speisen: verkaufte_speisen === undefined ? null : Number(verkaufte_speisen),
+      oe_bon: oe_bon === undefined ? null : Number(oe_bon),
+    };
+
+    const items = stores.auslastung.get(req.user!.betriebId) ?? [];
+    stores.auslastung.set(req.user!.betriebId, [...items, entry]);
+    return res.status(201).json({ item: entry });
+  });
+
+  app.get('/steuersaetze', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = stores.steuersaetze.get(req.user!.betriebId) ?? [];
+    return res.json({ items });
+  });
+
+  app.post('/steuersaetze', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { bezeichnung, satz_pct } = req.body ?? {};
+
+    if (!bezeichnung || satz_pct === undefined) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Tax label and rate are required.');
+    }
+
+    const entry: SteuersatzRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      bezeichnung: String(bezeichnung),
+      satz_pct: Number(satz_pct),
+    };
+
+    const items = stores.steuersaetze.get(req.user!.betriebId) ?? [];
+    stores.steuersaetze.set(req.user!.betriebId, [...items, entry]);
+    return res.status(201).json({ item: entry });
+  });
+
+  app.get('/verkaufskanaele', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = stores.verkaufskanaele.get(req.user!.betriebId) ?? [];
+    return res.json({ items });
+  });
+
+  app.post('/verkaufskanaele', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { name, provision_pct, kartengebuehr_pct, verpackungskosten, steuersatz_id } = req.body ?? {};
+
+    if (!name) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Channel name is required.');
+    }
+
+    const entry: VerkaufskanalRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      name: String(name),
+      provision_pct: Number(provision_pct ?? 0),
+      kartengebuehr_pct: Number(kartengebuehr_pct ?? 0),
+      verpackungskosten: Number(verpackungskosten ?? 0),
+      steuersatz_id: steuersatz_id ? String(steuersatz_id) : null,
+    };
+
+    const items = stores.verkaufskanaele.get(req.user!.betriebId) ?? [];
+    stores.verkaufskanaele.set(req.user!.betriebId, [...items, entry]);
+    return res.status(201).json({ item: entry });
+  });
+
+  app.get('/ziel', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const item = stores.ziel.get(req.user!.betriebId) ?? null;
+    return res.json({ item });
+  });
+
+  app.put('/ziel', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { ziel_typ, wert } = req.body ?? {};
+
+    if (!ziel_typ || wert === undefined) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Goal type and value are required.');
+    }
+
+    const entry: ZielRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      ziel_typ: String(ziel_typ),
+      wert: Number(wert),
+    } as ZielRecord;
+
+    stores.ziel.set(req.user!.betriebId, entry);
+    return res.json({ item: entry });
+  });
+
   app.get('/rezepte/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
     const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
@@ -321,6 +497,82 @@ export function createApp() {
     const ingredients = getRecipeLines(rezeptId, req.user!.betriebId);
 
     return res.json({ recipe: { ...recipe, ingredients } });
+  });
+
+  app.get('/rezepte/:id/kalkulation', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const lines = getRecipeLines(rezeptId, req.user!.betriebId);
+    const relevantIngredients = lines.map((line) => {
+      const ingredient = getTenantZutaten(req.user!.betriebId).find((item) => item.id === line.zutatId);
+      return {
+        zutatId: line.zutatId,
+        menge: line.menge,
+        zutat: ingredient,
+        verschnitt_pct: line.verschnitt_pct,
+        garverlust_pct: line.garverlust_pct,
+        schwund_pct: line.schwund_pct,
+      };
+    });
+
+    const wareneinsatz = relevantIngredients.reduce((sum, item) => {
+      if (!item.zutat) {
+        return sum;
+      }
+
+      const unitCost = item.zutat.einkaufspreis_netto / item.zutat.einkaufsmenge;
+      const factor = (1 - item.verschnitt_pct / 100) * (1 - item.garverlust_pct / 100) * (1 - item.schwund_pct / 100);
+      return sum + (unitCost * item.menge) / factor;
+    }, 0);
+
+    const fixkosten = stores.fixkosten.get(req.user!.betriebId) ?? [];
+    const sales = stores.auslastung.get(req.user!.betriebId) ?? [];
+    const latestSales = [...sales].sort((a, b) => new Date(b.monat).getTime() - new Date(a.monat).getTime())[0];
+    const fixedCostAmount = fixkosten.reduce((sum, item) => sum + Number(item.betrag_monat ?? 0), 0);
+    const fixkosten_anteil = (latestSales?.verkaufte_speisen ?? 0) > 0 ? fixedCostAmount / Number(latestSales?.verkaufte_speisen ?? 1) : fixedCostAmount;
+    const personalkosten = 0;
+    const selbstkosten = wareneinsatz + personalkosten + fixkosten_anteil;
+
+    const taxRows = (stores.steuersaetze.get(req.user!.betriebId) ?? []).reduce((map, entry) => {
+      map.set(entry.id, entry);
+      return map;
+    }, new Map<string, SteuersatzRecord>());
+
+    const channels = (stores.verkaufskanaele.get(req.user!.betriebId) ?? []).map((channel) => {
+      const tax = channel.steuersatz_id ? taxRows.get(channel.steuersatz_id) : undefined;
+      const variablePct = (Number(channel.provision_pct ?? 0) + Number(channel.kartengebuehr_pct ?? 0)) / 100;
+      const dbTarget = (stores.ziel.get(req.user!.betriebId)?.wert ?? 0) / 100;
+      const mindestpreis_netto = selbstkosten / (1 - variablePct);
+      const empfohlener_preis_netto = selbstkosten / (1 - dbTarget - variablePct);
+      const taxPct = (tax?.satz_pct ?? 0) / 100;
+      const preis_brutto = empfohlener_preis_netto * (1 + taxPct);
+      const db = empfohlener_preis_netto - wareneinsatz - (empfohlener_preis_netto * variablePct);
+      const db_quote = empfohlener_preis_netto > 0 ? db / empfohlener_preis_netto : 0;
+
+      return {
+        kanal: channel,
+        mindestpreis_netto,
+        empfohlener_preis_netto,
+        preis_brutto,
+        db,
+        db_quote,
+      };
+    });
+
+    return res.json({
+      kalkulation: {
+        wareneinsatz,
+        personalkosten,
+        fixkosten_anteil,
+        selbstkosten,
+        je_kanal: channels,
+      },
+    });
   });
 
   app.post('/rezepte', requireAuth, (req: AuthenticatedRequest, res: Response) => {
