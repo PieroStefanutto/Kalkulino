@@ -29,11 +29,33 @@ export interface TenantResource {
   betriebId: string;
 }
 
+export interface ZutatRecord {
+  id: string;
+  betriebId: string;
+  name: string;
+  einkaufsmenge: number;
+  einkaufspreis_netto: number;
+  einheit: string;
+  lieferantId?: string | null;
+  aktualisiert_am: string;
+}
+
+export interface PreisHistorieRecord {
+  id: string;
+  zutatId: string;
+  betriebId: string;
+  preis: number;
+  datum: string;
+  quelle: string;
+}
+
 const stores = {
   betriebe: new Map<string, BetriebRecord>(),
   users: new Map<string, UserRecord>(),
   usersByEmail: new Map<string, string>(),
   resources: new Map<string, TenantResource[]>(),
+  zutaten: new Map<string, ZutatRecord[]>(),
+  preishistorie: new Map<string, PreisHistorieRecord[]>(),
 };
 
 const createId = () => crypto.randomUUID();
@@ -65,11 +87,40 @@ function errorResponse(res: Response, status: number, code: string, message: str
   });
 }
 
+function getTenantZutaten(betriebId: string): ZutatRecord[] {
+  return stores.zutaten.get(betriebId) ?? [];
+}
+
+function getTenantPriceHistory(betriebId: string, zutatId: string): PreisHistorieRecord[] {
+  const all = stores.preishistorie.get(betriebId) ?? [];
+  return all.filter((entry) => entry.zutatId === zutatId);
+}
+
+function addPriceHistory(betriebId: string, zutatId: string, preis: number): PreisHistorieRecord[] {
+  const existing = stores.preishistorie.get(betriebId) ?? [];
+  const history = [
+    ...existing,
+    {
+      id: createId(),
+      zutatId,
+      betriebId,
+      preis,
+      datum: new Date().toISOString().slice(0, 10),
+      quelle: 'manuell',
+    },
+  ];
+
+  stores.preishistorie.set(betriebId, history);
+  return history;
+}
+
 export function resetStores(): void {
   stores.betriebe.clear();
   stores.users.clear();
   stores.usersByEmail.clear();
   stores.resources.clear();
+  stores.zutaten.clear();
+  stores.preishistorie.clear();
 }
 
 export function createApp() {
@@ -116,6 +167,40 @@ export function createApp() {
       { id: createId(), name: 'Tomaten', betriebId },
       { id: createId(), name: 'Pasta', betriebId },
     ]);
+
+    const seededIngredients: ZutatRecord[] = [
+      {
+        id: createId(),
+        betriebId,
+        name: 'Tomaten',
+        einkaufsmenge: 1,
+        einkaufspreis_netto: 1.8,
+        einheit: 'kg',
+        aktualisiert_am: new Date().toISOString(),
+      },
+      {
+        id: createId(),
+        betriebId,
+        name: 'Pasta',
+        einkaufsmenge: 1,
+        einkaufspreis_netto: 2.4,
+        einheit: 'kg',
+        aktualisiert_am: new Date().toISOString(),
+      },
+    ];
+
+    stores.zutaten.set(betriebId, seededIngredients);
+    stores.preishistorie.set(
+      betriebId,
+      seededIngredients.map((ingredient) => ({
+        id: createId(),
+        zutatId: ingredient.id,
+        betriebId,
+        preis: ingredient.einkaufspreis_netto,
+        datum: new Date().toISOString().slice(0, 10),
+        quelle: 'manuell',
+      })),
+    );
 
     const passwordHash = await bcrypt.hash(String(password), 10);
     const user: UserRecord = {
@@ -173,12 +258,115 @@ export function createApp() {
 
   app.get('/betrieb/:betriebId/zutaten', requireAuth, requireTenantAccess, (req: AuthenticatedRequest, res: Response) => {
     const betriebId = Array.isArray(req.params.betriebId) ? req.params.betriebId[0] : req.params.betriebId;
-    const items = stores.resources.get(betriebId) ?? [];
-    const tenantItems = filterByTenant(items, req.user!.betriebId);
+    const items = getTenantZutaten(betriebId);
+    const tenantItems = filterByTenant(items as Array<{ betriebId: string }>, req.user!.betriebId);
 
     return res.json({
       items: tenantItems,
     });
+  });
+
+  app.get('/zutaten', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = getTenantZutaten(req.user!.betriebId);
+    return res.json({ items });
+  });
+
+  app.get('/zutaten/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const zutatId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const ingredient = getTenantZutaten(req.user!.betriebId).find((item) => item.id === zutatId);
+
+    if (!ingredient) {
+      return errorResponse(res, 404, 'ZUTAT_NOT_FOUND', 'The requested ingredient was not found for this tenant.');
+    }
+
+    return res.json({ item: ingredient });
+  });
+
+  app.post('/zutaten', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { name, einkaufsmenge, einkaufspreis_netto, einheit, lieferantId } = req.body ?? {};
+
+    if (!name || !einkaufsmenge || !einkaufspreis_netto || !einheit) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Name, quantity, buy price and unit are required.');
+    }
+
+    const item: ZutatRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      name: String(name),
+      einkaufsmenge: Number(einkaufsmenge),
+      einkaufspreis_netto: Number(einkaufspreis_netto),
+      einheit: String(einheit),
+      lieferantId: lieferantId ? String(lieferantId) : null,
+      aktualisiert_am: new Date().toISOString(),
+    };
+
+    const tenantItems = getTenantZutaten(req.user!.betriebId);
+    const nextItems = [...tenantItems, item];
+    stores.zutaten.set(req.user!.betriebId, nextItems);
+    const history = addPriceHistory(req.user!.betriebId, item.id, item.einkaufspreis_netto);
+
+    return res.status(201).json({ ingredient: item, history });
+  });
+
+  app.put('/zutaten/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const zutatId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const current = getTenantZutaten(req.user!.betriebId).find((item) => item.id === zutatId);
+
+    if (!current) {
+      return errorResponse(res, 404, 'ZUTAT_NOT_FOUND', 'The requested ingredient was not found for this tenant.');
+    }
+
+    const nextItem: ZutatRecord = {
+      ...current,
+      ...req.body,
+      id: current.id,
+      betriebId: req.user!.betriebId,
+      aktualisiert_am: new Date().toISOString(),
+    };
+
+    const updatedItems = getTenantZutaten(req.user!.betriebId).map((item) => item.id === current.id ? nextItem : item);
+    stores.zutaten.set(req.user!.betriebId, updatedItems);
+
+    if (req.body.einkaufspreis_netto !== undefined && Number(req.body.einkaufspreis_netto) !== current.einkaufspreis_netto) {
+      addPriceHistory(req.user!.betriebId, current.id, Number(req.body.einkaufspreis_netto));
+    }
+
+    return res.json({ ingredient: nextItem });
+  });
+
+  app.delete('/zutaten/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const zutatId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const tenantItems = getTenantZutaten(req.user!.betriebId);
+    const ingredient = tenantItems.find((item) => item.id === zutatId);
+
+    if (!ingredient) {
+      return errorResponse(res, 404, 'ZUTAT_NOT_FOUND', 'The requested ingredient was not found for this tenant.');
+    }
+
+    stores.zutaten.set(
+      req.user!.betriebId,
+      tenantItems.filter((item) => item.id !== zutatId),
+    );
+
+    const history = stores.preishistorie.get(req.user!.betriebId) ?? [];
+    stores.preishistorie.set(
+      req.user!.betriebId,
+      history.filter((entry) => entry.zutatId !== zutatId),
+    );
+
+    return res.json({ deleted: true, ingredientId: zutatId });
+  });
+
+  app.get('/zutaten/:id/preishistorie', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const zutatId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const ingredient = getTenantZutaten(req.user!.betriebId).find((item) => item.id === zutatId);
+
+    if (!ingredient) {
+      return errorResponse(res, 404, 'ZUTAT_NOT_FOUND', 'The requested ingredient was not found for this tenant.');
+    }
+
+    const history = getTenantPriceHistory(req.user!.betriebId, zutatId);
+    return res.json({ history });
   });
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
