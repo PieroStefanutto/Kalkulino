@@ -155,4 +155,42 @@ describe('berechneKalkulation', () => {
     expect(kanal.empfohlener_preis_netto).toBeCloseTo(expected, 12);
     expect(kanal.empfohlener_preis_netto).not.toBeCloseTo(selfKosten * (1 + 0.35 + 0.35), 12);
   });
+
+  it('unterstützt ein absolutes Gewinnziel in Euro', () => {
+    const rezept = {
+      id: 'r-4',
+      name: 'Profit dish',
+      portionsgroesse: 1,
+      zutaten: [
+        {
+          menge: 1,
+          zutat: {
+            einkaufspreis_netto: 10,
+            einkaufsmenge: 1,
+          },
+          verschnitt_pct: 0,
+          garverlust_pct: 0,
+          schwund_pct: 0,
+        },
+      ],
+      arbeitszeit: [],
+    };
+
+    const result = berechneKalkulation({
+      rezept,
+      fixkosten: [],
+      auslastung: [{ monat: '2026-09-01', verkaufte_speisen: 100 }],
+      verkaufskanale: [{
+        id: 'k-1',
+        name: 'Restaurant',
+        provision_pct: 0.1,
+        kartengebuehr_pct: 0,
+        steuersatz: { satz_pct: 0 },
+      }],
+      ziel: { ziel_typ: 'gewinn_eur', wert: 5 },
+    });
+
+    expect(result.je_kanal[0].empfohlener_preis_netto).toBeGreaterThan(result.selbstkosten);
+    expect(result.je_kanal[0].db).toBeGreaterThan(0);
+  });
 });

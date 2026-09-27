@@ -9,6 +9,7 @@ import {
   type AuthenticatedRequest,
   type AuthenticatedUser,
 } from '../auth/tenant';
+import { berechneKalkulation } from '../core/pricing';
 
 export interface BetriebRecord {
   id: string;
@@ -554,72 +555,137 @@ export function createApp() {
       return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
     }
 
-    const lines = getRecipeLines(rezeptId, req.user!.betriebId);
-    const relevantIngredients = lines.map((line) => {
-      const ingredient = getTenantZutaten(req.user!.betriebId).find((item) => item.id === line.zutatId);
-      return {
-        zutatId: line.zutatId,
-        menge: line.menge,
-        zutat: ingredient,
-        verschnitt_pct: line.verschnitt_pct,
-        garverlust_pct: line.garverlust_pct,
-        schwund_pct: line.schwund_pct,
-      };
-    });
-
-    const wareneinsatz = relevantIngredients.reduce((sum, item) => {
-      if (!item.zutat) {
-        return sum;
-      }
-
-      const unitCost = item.zutat.einkaufspreis_netto / item.zutat.einkaufsmenge;
-      const factor = (1 - item.verschnitt_pct / 100) * (1 - item.garverlust_pct / 100) * (1 - item.schwund_pct / 100);
-      return sum + (unitCost * item.menge) / factor;
-    }, 0);
-
-    const fixkosten = stores.fixkosten.get(req.user!.betriebId) ?? [];
+    const recipeLines = getRecipeLines(rezeptId, req.user!.betriebId);
+    const tenantZutaten = getTenantZutaten(req.user!.betriebId);
+    const tenantRecipes = getTenantRezepte(req.user!.betriebId);
+    const categories = stores.personalkategorien.get(req.user!.betriebId) ?? [];
     const sales = stores.auslastung.get(req.user!.betriebId) ?? [];
-    const latestSales = [...sales].sort((a, b) => new Date(b.monat).getTime() - new Date(a.monat).getTime())[0];
-    const fixedCostAmount = fixkosten.reduce((sum, item) => sum + Number(item.betrag_monat ?? 0), 0);
-    const fixkosten_anteil = (latestSales?.verkaufte_speisen ?? 0) > 0 ? fixedCostAmount / Number(latestSales?.verkaufte_speisen ?? 1) : fixedCostAmount;
-    const personalkosten = 0;
-    const selbstkosten = wareneinsatz + personalkosten + fixkosten_anteil;
+    const taxRows = stores.steuersaetze.get(req.user!.betriebId) ?? [];
+    const channels = stores.verkaufskanaele.get(req.user!.betriebId) ?? [];
+    const goal = stores.ziel.get(req.user!.betriebId) ?? { id: createId(), betriebId: req.user!.betriebId, ziel_typ: 'db_quote', wert: 0 };
 
-    const taxRows = (stores.steuersaetze.get(req.user!.betriebId) ?? []).reduce((map, entry) => {
-      map.set(entry.id, entry);
-      return map;
-    }, new Map<string, SteuersatzRecord>());
+    const rezeptInput = {
+      id: recipe.id,
+      name: recipe.name,
+      portionsgroesse: recipe.portionsgroesse,
+      ist_unterrezept: recipe.ist_unterrezept,
+      verkaufspreis_netto: recipe.verkaufspreis_netto ?? undefined,
+      zutaten: recipeLines.map((line) => {
+        const ingredient = tenantZutaten.find((item) => item.id === line.zutatId);
 
-    const channels = (stores.verkaufskanaele.get(req.user!.betriebId) ?? []).map((channel) => {
-      const tax = channel.steuersatz_id ? taxRows.get(channel.steuersatz_id) : undefined;
-      const variablePct = (Number(channel.provision_pct ?? 0) + Number(channel.kartengebuehr_pct ?? 0)) / 100;
-      const dbTarget = (stores.ziel.get(req.user!.betriebId)?.wert ?? 0) / 100;
-      const mindestpreis_netto = selbstkosten / (1 - variablePct);
-      const empfohlener_preis_netto = selbstkosten / (1 - dbTarget - variablePct);
-      const taxPct = (tax?.satz_pct ?? 0) / 100;
-      const preis_brutto = empfohlener_preis_netto * (1 + taxPct);
-      const db = empfohlener_preis_netto - wareneinsatz - (empfohlener_preis_netto * variablePct);
-      const db_quote = empfohlener_preis_netto > 0 ? db / empfohlener_preis_netto : 0;
+        if (ingredient) {
+          return {
+            menge: Number(line.menge ?? 0),
+            zutat: {
+              einkaufspreis_netto: Number(ingredient.einkaufspreis_netto ?? 0),
+              einkaufsmenge: Number(ingredient.einkaufsmenge ?? 0),
+            },
+            verschnitt_pct: Number(line.verschnitt_pct ?? 0),
+            garverlust_pct: Number(line.garverlust_pct ?? 0),
+            schwund_pct: Number(line.schwund_pct ?? 0),
+          };
+        }
 
-      return {
-        kanal: channel,
-        mindestpreis_netto,
-        empfohlener_preis_netto,
-        preis_brutto,
-        db,
-        db_quote,
-      };
-    });
+        const subRecipe = tenantRecipes.find((item) => item.id === line.unterrezeptId);
 
-    return res.json({
-      kalkulation: {
-        wareneinsatz,
-        personalkosten,
-        fixkosten_anteil,
-        selbstkosten,
-        je_kanal: channels,
+        if (subRecipe) {
+          return {
+            menge: Number(line.menge ?? 0),
+            unterrezept: {
+              id: subRecipe.id,
+              name: subRecipe.name,
+              portionsgroesse: subRecipe.portionsgroesse,
+              ist_unterrezept: subRecipe.ist_unterrezept,
+              verkaufspreis_netto: subRecipe.verkaufspreis_netto ?? undefined,
+              zutaten: (getRecipeLines(subRecipe.id, req.user!.betriebId) ?? []).map((subLine) => {
+                const subIngredient = tenantZutaten.find((item) => item.id === subLine.zutatId);
+                if (subIngredient) {
+                  return {
+                    menge: Number(subLine.menge ?? 0),
+                    zutat: {
+                      einkaufspreis_netto: Number(subIngredient.einkaufspreis_netto ?? 0),
+                      einkaufsmenge: Number(subIngredient.einkaufsmenge ?? 0),
+                    },
+                    verschnitt_pct: Number(subLine.verschnitt_pct ?? 0),
+                    garverlust_pct: Number(subLine.garverlust_pct ?? 0),
+                    schwund_pct: Number(subLine.schwund_pct ?? 0),
+                  };
+                }
+
+                return {
+                  menge: Number(subLine.menge ?? 0),
+                  verschnitt_pct: Number(subLine.verschnitt_pct ?? 0),
+                  garverlust_pct: Number(subLine.garverlust_pct ?? 0),
+                  schwund_pct: Number(subLine.schwund_pct ?? 0),
+                };
+              }),
+              arbeitszeit: (stores.rezeptArbeitszeit.get(req.user!.betriebId) ?? [])
+                .filter((entry) => entry.rezeptId === subRecipe.id)
+                .map((entry) => ({
+                  vorbereitung_min: Number(entry.vorbereitung_min ?? 0),
+                  produktion_min: Number(entry.produktion_min ?? 0),
+                  anrichten_min: Number(entry.anrichten_min ?? 0),
+                  batch_groesse: Number(entry.batch_groesse ?? 1),
+                  personalkategorie: {
+                    stundensatz_ag_gesamt: Number(
+                      (categories.find((category) => category.id === entry.personalkategorie_id)?.stundensatz_ag_gesamt ?? 0),
+                    ),
+                  },
+                })),
+            },
+            verschnitt_pct: Number(line.verschnitt_pct ?? 0),
+            garverlust_pct: Number(line.garverlust_pct ?? 0),
+            schwund_pct: Number(line.schwund_pct ?? 0),
+          };
+        }
+
+        return {
+          menge: Number(line.menge ?? 0),
+          verschnitt_pct: Number(line.verschnitt_pct ?? 0),
+          garverlust_pct: Number(line.garverlust_pct ?? 0),
+          schwund_pct: Number(line.schwund_pct ?? 0),
+        };
+      }),
+      arbeitszeit: (stores.rezeptArbeitszeit.get(req.user!.betriebId) ?? [])
+        .filter((entry) => entry.rezeptId === rezeptId)
+        .map((entry) => ({
+          vorbereitung_min: Number(entry.vorbereitung_min ?? 0),
+          produktion_min: Number(entry.produktion_min ?? 0),
+          anrichten_min: Number(entry.anrichten_min ?? 0),
+          batch_groesse: Number(entry.batch_groesse ?? 1),
+          personalkategorie: {
+            stundensatz_ag_gesamt: Number(
+              (categories.find((category) => category.id === entry.personalkategorie_id)?.stundensatz_ag_gesamt ?? 0),
+            ),
+          },
+        })),
+    };
+
+    const result = berechneKalkulation({
+      rezept: rezeptInput,
+      fixkosten: (stores.fixkosten.get(req.user!.betriebId) ?? []).map((entry) => ({
+        betrag_monat: Number(entry.betrag_monat ?? 0),
+      })),
+      auslastung: (sales ?? []).map((entry) => ({
+        monat: entry.monat,
+        verkaufte_speisen: Number(entry.verkaufte_speisen ?? 0),
+      })),
+      verkaufskanale: channels.map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        provision_pct: Number(channel.provision_pct ?? 0),
+        kartengebuehr_pct: Number(channel.kartengebuehr_pct ?? 0),
+        steuersatz: {
+          satz_pct: Number((taxRows.find((entry) => entry.id === channel.steuersatz_id)?.satz_pct ?? 0)),
+        },
+      })),
+      ziel: {
+        ziel_typ: goal.ziel_typ,
+        wert: Number(goal.wert ?? 0),
       },
     });
+
+    return res.json({ kalkulation: result });
   });
 
   app.post('/rezepte', requireAuth, (req: AuthenticatedRequest, res: Response) => {
