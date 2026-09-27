@@ -820,6 +820,61 @@ export function createApp() {
     return res.status(201).json({ item });
   });
 
+  app.put('/rezepte/:id/arbeitszeit/:aid', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const arbeitszeitId = Array.isArray(req.params.aid) ? req.params.aid[0] : req.params.aid;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const entries = (stores.rezeptArbeitszeit.get(req.user!.betriebId) ?? []).map((entry) => {
+      if (entry.id === arbeitszeitId && entry.rezeptId === rezeptId) {
+        return {
+          ...entry,
+          ...req.body,
+          id: entry.id,
+          betriebId: req.user!.betriebId,
+          rezeptId,
+          personalkategorie_id: String(req.body?.personalkategorie_id ?? entry.personalkategorie_id),
+          vorbereitung_min: Number(req.body?.vorbereitung_min ?? entry.vorbereitung_min),
+          produktion_min: Number(req.body?.produktion_min ?? entry.produktion_min),
+          anrichten_min: Number(req.body?.anrichten_min ?? entry.anrichten_min),
+          batch_groesse: Number(req.body?.batch_groesse ?? entry.batch_groesse),
+        };
+      }
+
+      return entry;
+    });
+
+    const target = entries.find((entry) => entry.id === arbeitszeitId && entry.rezeptId === rezeptId);
+
+    if (!target) {
+      return errorResponse(res, 404, 'REZEPT_ARBEITSZEIT_NOT_FOUND', 'The requested work-time entry was not found.');
+    }
+
+    stores.rezeptArbeitszeit.set(req.user!.betriebId, entries);
+    return res.json({ item: target });
+  });
+
+  app.delete('/rezepte/:id/arbeitszeit/:aid', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const arbeitszeitId = Array.isArray(req.params.aid) ? req.params.aid[0] : req.params.aid;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const entries = (stores.rezeptArbeitszeit.get(req.user!.betriebId) ?? []).filter(
+      (entry) => !(entry.id === arbeitszeitId && entry.rezeptId === rezeptId),
+    );
+
+    stores.rezeptArbeitszeit.set(req.user!.betriebId, entries);
+    return res.json({ deleted: true, entryId: arbeitszeitId });
+  });
+
   app.put('/rezepte/:id/zutaten/:zid', requireAuth, (req: AuthenticatedRequest, res: Response) => {
     const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
     const zutatId = Array.isArray(req.params.zid) ? req.params.zid[0] : req.params.zid;

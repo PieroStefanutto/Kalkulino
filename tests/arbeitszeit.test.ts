@@ -55,6 +55,56 @@ describe('personalkategorien and recipe working time', () => {
     expect(detailRes.body.recipe.arbeitszeit).toHaveLength(1);
   });
 
+  it('updates an existing recipe work-time entry', async () => {
+    const app = createApp();
+
+    const auth = await request(app)
+      .post('/auth/register')
+      .send({
+        email: 'edit-labor@example.com',
+        password: 'secret123',
+        betriebName: 'Edit Labor Co',
+      });
+
+    const token = auth.body.token;
+
+    const categoryRes = await request(app)
+      .post('/personalkategorien')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ bezeichnung: 'Koch', stundensatz_ag_gesamt: 28 });
+
+    const recipeRes = await request(app)
+      .post('/rezepte')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ name: 'Pasta', portionsgroesse: 2 });
+
+    const created = await request(app)
+      .post(`/rezepte/${recipeRes.body.recipe.id}/arbeitszeit`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        personalkategorie_id: categoryRes.body.item.id,
+        vorbereitung_min: 10,
+        produktion_min: 20,
+        anrichten_min: 5,
+        batch_groesse: 2,
+      });
+
+    const updated = await request(app)
+      .put(`/rezepte/${recipeRes.body.recipe.id}/arbeitszeit/${created.body.item.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        personalkategorie_id: categoryRes.body.item.id,
+        vorbereitung_min: 12,
+        produktion_min: 22,
+        anrichten_min: 8,
+        batch_groesse: 3,
+      });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body.item.vorbereitung_min).toBe(12);
+    expect(updated.body.item.batch_groesse).toBe(3);
+  });
+
   it('keeps labor data isolated per tenant', async () => {
     const app = createApp();
 

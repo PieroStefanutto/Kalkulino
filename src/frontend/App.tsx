@@ -210,6 +210,7 @@ export default function App() {
   });
 
   const [selectedRecipeDetail, setSelectedRecipeDetail] = useState<RecipeDetail | null>(null);
+  const [recipeLineEditId, setRecipeLineEditId] = useState<string | null>(null);
   const [recipeLineForm, setRecipeLineForm] = useState({
     targetType: 'zutat' as 'zutat' | 'unterrezept',
     targetId: '',
@@ -218,6 +219,7 @@ export default function App() {
     garverlust_pct: '0',
     schwund_pct: '0',
   });
+  const [workEntryEditId, setWorkEntryEditId] = useState<string | null>(null);
   const [workEntryForm, setWorkEntryForm] = useState({
     personalkategorie_id: '',
     vorbereitung_min: '0',
@@ -250,6 +252,29 @@ export default function App() {
         personalkategorie_id: current.personalkategorie_id || laborCategories[0].id,
       }));
     }
+  };
+
+  const resetRecipeLineForm = () => {
+    setRecipeLineEditId(null);
+    setRecipeLineForm({
+      targetType: 'zutat',
+      targetId: '',
+      menge: '1',
+      verschnitt_pct: '0',
+      garverlust_pct: '0',
+      schwund_pct: '0',
+    });
+  };
+
+  const resetWorkEntryForm = () => {
+    setWorkEntryEditId(null);
+    setWorkEntryForm({
+      personalkategorie_id: laborCategories[0]?.id ?? '',
+      vorbereitung_min: '0',
+      produktion_min: '0',
+      anrichten_min: '0',
+      batch_groesse: '1',
+    });
   };
 
   const fetchSessionData = async () => {
@@ -663,26 +688,28 @@ export default function App() {
     setError('');
 
     try {
-      await apiFetch(`/rezepte/${selectedRecipeId}/zutaten`, {
-        method: 'POST',
-        body: JSON.stringify({
-          zutatId: recipeLineForm.targetType === 'zutat' ? recipeLineForm.targetId : undefined,
-          unterrezeptId: recipeLineForm.targetType === 'unterrezept' ? recipeLineForm.targetId : undefined,
-          menge: Number(recipeLineForm.menge),
-          verschnitt_pct: Number(recipeLineForm.verschnitt_pct),
-          garverlust_pct: Number(recipeLineForm.garverlust_pct),
-          schwund_pct: Number(recipeLineForm.schwund_pct),
-        }),
-      });
+      const payload = {
+        zutatId: recipeLineForm.targetType === 'zutat' ? recipeLineForm.targetId : undefined,
+        unterrezeptId: recipeLineForm.targetType === 'unterrezept' ? recipeLineForm.targetId : undefined,
+        menge: Number(recipeLineForm.menge),
+        verschnitt_pct: Number(recipeLineForm.verschnitt_pct),
+        garverlust_pct: Number(recipeLineForm.garverlust_pct),
+        schwund_pct: Number(recipeLineForm.schwund_pct),
+      };
 
-      setRecipeLineForm({
-        targetType: 'zutat',
-        targetId: '',
-        menge: '1',
-        verschnitt_pct: '0',
-        garverlust_pct: '0',
-        schwund_pct: '0',
-      });
+      if (recipeLineEditId) {
+        await apiFetch(`/rezepte/${selectedRecipeId}/zutaten/${recipeLineEditId}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch(`/rezepte/${selectedRecipeId}/zutaten`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      }
+
+      resetRecipeLineForm();
       await refreshSelectedRecipe();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Rezeptbestandteil konnte nicht gespeichert werden.');
@@ -697,6 +724,9 @@ export default function App() {
     try {
       setError('');
       await apiFetch(`/rezepte/${selectedRecipeId}/zutaten/${lineId}`, { method: 'DELETE' });
+      if (recipeLineEditId === lineId) {
+        resetRecipeLineForm();
+      }
       await refreshSelectedRecipe();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : 'Rezeptbestandteil konnte nicht gelöscht werden.');
@@ -712,27 +742,47 @@ export default function App() {
     setError('');
 
     try {
-      await apiFetch(`/rezepte/${selectedRecipeId}/arbeitszeit`, {
-        method: 'POST',
-        body: JSON.stringify({
-          personalkategorie_id: workEntryForm.personalkategorie_id,
-          vorbereitung_min: Number(workEntryForm.vorbereitung_min),
-          produktion_min: Number(workEntryForm.produktion_min),
-          anrichten_min: Number(workEntryForm.anrichten_min),
-          batch_groesse: Number(workEntryForm.batch_groesse),
-        }),
-      });
+      const payload = {
+        personalkategorie_id: workEntryForm.personalkategorie_id,
+        vorbereitung_min: Number(workEntryForm.vorbereitung_min),
+        produktion_min: Number(workEntryForm.produktion_min),
+        anrichten_min: Number(workEntryForm.anrichten_min),
+        batch_groesse: Number(workEntryForm.batch_groesse),
+      };
 
-      setWorkEntryForm({
-        personalkategorie_id: laborCategories[0]?.id ?? '',
-        vorbereitung_min: '0',
-        produktion_min: '0',
-        anrichten_min: '0',
-        batch_groesse: '1',
-      });
+      if (workEntryEditId) {
+        await apiFetch(`/rezepte/${selectedRecipeId}/arbeitszeit/${workEntryEditId}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await apiFetch(`/rezepte/${selectedRecipeId}/arbeitszeit`, {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+      }
+
+      resetWorkEntryForm();
       await refreshSelectedRecipe();
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Arbeitszeit konnte nicht gespeichert werden.');
+    }
+  };
+
+  const handleDeleteWorkEntry = async (entryId: string) => {
+    if (!selectedRecipeId) {
+      return;
+    }
+
+    try {
+      setError('');
+      await apiFetch(`/rezepte/${selectedRecipeId}/arbeitszeit/${entryId}`, { method: 'DELETE' });
+      if (workEntryEditId === entryId) {
+        resetWorkEntryForm();
+      }
+      await refreshSelectedRecipe();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Arbeitszeit konnte nicht gelöscht werden.');
     }
   };
 
@@ -947,9 +997,16 @@ export default function App() {
                         />
                       </label>
                     </div>
-                    <button type="submit" className="primary-button small-button">
-                      Hinzufügen
-                    </button>
+                    <div className="button-row">
+                      <button type="submit" className="primary-button small-button">
+                        {recipeLineEditId ? 'Speichern' : 'Hinzufügen'}
+                      </button>
+                      {recipeLineEditId && (
+                        <button type="button" className="ghost-button small-button" onClick={resetRecipeLineForm}>
+                          Abbrechen
+                        </button>
+                      )}
+                    </div>
                   </form>
 
                   <div className="list-stack compact">
@@ -966,9 +1023,28 @@ export default function App() {
                               {line.menge} · Verschnitt {line.verschnitt_pct}% · Garverlust {line.garverlust_pct}% · Schwund {line.schwund_pct}%
                             </small>
                           </div>
-                          <button type="button" className="danger-button" onClick={() => handleDeleteRecipeLine(line.id)}>
-                            Entfernen
-                          </button>
+                          <div className="mini-actions">
+                            <button
+                              type="button"
+                              className="link-button"
+                              onClick={() => {
+                                setRecipeLineEditId(line.id);
+                                setRecipeLineForm({
+                                  targetType: line.zutatId ? 'zutat' : 'unterrezept',
+                                  targetId: line.zutatId ?? line.unterrezeptId ?? '',
+                                  menge: String(line.menge),
+                                  verschnitt_pct: String(line.verschnitt_pct),
+                                  garverlust_pct: String(line.garverlust_pct),
+                                  schwund_pct: String(line.schwund_pct),
+                                });
+                              }}
+                            >
+                              Bearbeiten
+                            </button>
+                            <button type="button" className="danger-button" onClick={() => handleDeleteRecipeLine(line.id)}>
+                              Entfernen
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
@@ -1029,9 +1105,16 @@ export default function App() {
                         />
                       </label>
                     </div>
-                    <button type="submit" className="primary-button small-button">
-                      Hinzufügen
-                    </button>
+                    <div className="button-row">
+                      <button type="submit" className="primary-button small-button">
+                        {workEntryEditId ? 'Speichern' : 'Hinzufügen'}
+                      </button>
+                      {workEntryEditId && (
+                        <button type="button" className="ghost-button small-button" onClick={resetWorkEntryForm}>
+                          Abbrechen
+                        </button>
+                      )}
+                    </div>
                   </form>
 
                   <div className="list-stack compact">
@@ -1045,6 +1128,27 @@ export default function App() {
                             <small>
                               Vor {entry.vorbereitung_min} · Prod {entry.produktion_min} · Anr {entry.anrichten_min} · Batch {entry.batch_groesse}
                             </small>
+                          </div>
+                          <div className="mini-actions">
+                            <button
+                              type="button"
+                              className="link-button"
+                              onClick={() => {
+                                setWorkEntryEditId(entry.id);
+                                setWorkEntryForm({
+                                  personalkategorie_id: entry.personalkategorie_id,
+                                  vorbereitung_min: String(entry.vorbereitung_min),
+                                  produktion_min: String(entry.produktion_min),
+                                  anrichten_min: String(entry.anrichten_min),
+                                  batch_groesse: String(entry.batch_groesse),
+                                });
+                              }}
+                            >
+                              Bearbeiten
+                            </button>
+                            <button type="button" className="danger-button" onClick={() => handleDeleteWorkEntry(entry.id)}>
+                              Entfernen
+                            </button>
                           </div>
                         </div>
                       );
