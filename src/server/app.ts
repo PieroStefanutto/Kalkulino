@@ -112,6 +112,24 @@ export interface ZielRecord {
   wert: number;
 }
 
+export interface PersonalkategorieRecord {
+  id: string;
+  betriebId: string;
+  bezeichnung: string;
+  stundensatz_ag_gesamt: number;
+}
+
+export interface RezeptArbeitszeitRecord {
+  id: string;
+  betriebId: string;
+  rezeptId: string;
+  personalkategorie_id: string;
+  vorbereitung_min: number;
+  produktion_min: number;
+  anrichten_min: number;
+  batch_groesse: number;
+}
+
 const stores = {
   betriebe: new Map<string, BetriebRecord>(),
   users: new Map<string, UserRecord>(),
@@ -126,6 +144,8 @@ const stores = {
   steuersaetze: new Map<string, SteuersatzRecord[]>(),
   verkaufskanaele: new Map<string, VerkaufskanalRecord[]>(),
   ziel: new Map<string, ZielRecord>(),
+  personalkategorien: new Map<string, PersonalkategorieRecord[]>(),
+  rezeptArbeitszeit: new Map<string, RezeptArbeitszeitRecord[]>(),
 };
 
 const createId = () => crypto.randomUUID();
@@ -206,6 +226,8 @@ export function resetStores(): void {
   stores.steuersaetze.clear();
   stores.verkaufskanaele.clear();
   stores.ziel.clear();
+  stores.personalkategorien.clear();
+  stores.rezeptArbeitszeit.clear();
 }
 
 export function createApp() {
@@ -412,6 +434,30 @@ export function createApp() {
     return res.status(201).json({ item: entry });
   });
 
+  app.get('/personalkategorien', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = stores.personalkategorien.get(req.user!.betriebId) ?? [];
+    return res.json({ items });
+  });
+
+  app.post('/personalkategorien', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { bezeichnung, stundensatz_ag_gesamt } = req.body ?? {};
+
+    if (!bezeichnung || stundensatz_ag_gesamt === undefined) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Category name and hourly rate are required.');
+    }
+
+    const item: PersonalkategorieRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      bezeichnung: String(bezeichnung),
+      stundensatz_ag_gesamt: Number(stundensatz_ag_gesamt),
+    };
+
+    const items = stores.personalkategorien.get(req.user!.betriebId) ?? [];
+    stores.personalkategorien.set(req.user!.betriebId, [...items, item]);
+    return res.status(201).json({ item });
+  });
+
   app.get('/steuersaetze', requireAuth, (req: AuthenticatedRequest, res: Response) => {
     const items = stores.steuersaetze.get(req.user!.betriebId) ?? [];
     return res.json({ items });
@@ -495,8 +541,9 @@ export function createApp() {
     }
 
     const ingredients = getRecipeLines(rezeptId, req.user!.betriebId);
+    const arbeitszeit = (stores.rezeptArbeitszeit.get(req.user!.betriebId) ?? []).filter((line) => line.rezeptId === rezeptId);
 
-    return res.json({ recipe: { ...recipe, ingredients } });
+    return res.json({ recipe: { ...recipe, ingredients, arbeitszeit } });
   });
 
   app.get('/rezepte/:id/kalkulation', requireAuth, (req: AuthenticatedRequest, res: Response) => {
@@ -675,6 +722,36 @@ export function createApp() {
     stores.rezeptZutaten.set(req.user!.betriebId, [...existing, line]);
 
     return res.status(201).json({ line });
+  });
+
+  app.post('/rezepte/:id/arbeitszeit', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const { personalkategorie_id, vorbereitung_min, produktion_min, anrichten_min, batch_groesse } = req.body ?? {};
+
+    if (!personalkategorie_id) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'A labor category is required.');
+    }
+
+    const item: RezeptArbeitszeitRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      rezeptId,
+      personalkategorie_id: String(personalkategorie_id),
+      vorbereitung_min: Number(vorbereitung_min ?? 0),
+      produktion_min: Number(produktion_min ?? 0),
+      anrichten_min: Number(anrichten_min ?? 0),
+      batch_groesse: Number(batch_groesse ?? 1),
+    };
+
+    const entries = stores.rezeptArbeitszeit.get(req.user!.betriebId) ?? [];
+    stores.rezeptArbeitszeit.set(req.user!.betriebId, [...entries, item]);
+    return res.status(201).json({ item });
   });
 
   app.put('/rezepte/:id/zutaten/:zid', requireAuth, (req: AuthenticatedRequest, res: Response) => {
