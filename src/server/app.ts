@@ -49,6 +49,28 @@ export interface PreisHistorieRecord {
   quelle: string;
 }
 
+export interface RezeptRecord {
+  id: string;
+  betriebId: string;
+  name: string;
+  portionsgroesse: number;
+  ist_unterrezept: boolean;
+  verkaufspreis_netto?: number | null;
+  aktualisiert_am: string;
+}
+
+export interface RezeptZutatRecord {
+  id: string;
+  betriebId: string;
+  rezeptId: string;
+  zutatId?: string | null;
+  unterrezeptId?: string | null;
+  menge: number;
+  verschnitt_pct: number;
+  garverlust_pct: number;
+  schwund_pct: number;
+}
+
 const stores = {
   betriebe: new Map<string, BetriebRecord>(),
   users: new Map<string, UserRecord>(),
@@ -56,6 +78,8 @@ const stores = {
   resources: new Map<string, TenantResource[]>(),
   zutaten: new Map<string, ZutatRecord[]>(),
   preishistorie: new Map<string, PreisHistorieRecord[]>(),
+  rezepte: new Map<string, RezeptRecord[]>(),
+  rezeptZutaten: new Map<string, RezeptZutatRecord[]>(),
 };
 
 const createId = () => crypto.randomUUID();
@@ -96,6 +120,14 @@ function getTenantPriceHistory(betriebId: string, zutatId: string): PreisHistori
   return all.filter((entry) => entry.zutatId === zutatId);
 }
 
+function getTenantRezepte(betriebId: string): RezeptRecord[] {
+  return stores.rezepte.get(betriebId) ?? [];
+}
+
+function getRecipeLines(rezeptId: string, betriebId: string): RezeptZutatRecord[] {
+  return (stores.rezeptZutaten.get(betriebId) ?? []).filter((line) => line.rezeptId === rezeptId);
+}
+
 function addPriceHistory(betriebId: string, zutatId: string, preis: number): PreisHistorieRecord[] {
   const existing = stores.preishistorie.get(betriebId) ?? [];
   const history = [
@@ -121,6 +153,8 @@ export function resetStores(): void {
   stores.resources.clear();
   stores.zutaten.clear();
   stores.preishistorie.clear();
+  stores.rezepte.clear();
+  stores.rezeptZutaten.clear();
 }
 
 export function createApp() {
@@ -269,6 +303,176 @@ export function createApp() {
   app.get('/zutaten', requireAuth, (req: AuthenticatedRequest, res: Response) => {
     const items = getTenantZutaten(req.user!.betriebId);
     return res.json({ items });
+  });
+
+  app.get('/rezepte', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const items = getTenantRezepte(req.user!.betriebId);
+    return res.json({ items });
+  });
+
+  app.get('/rezepte/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const ingredients = getRecipeLines(rezeptId, req.user!.betriebId);
+
+    return res.json({ recipe: { ...recipe, ingredients } });
+  });
+
+  app.post('/rezepte', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const { name, portionsgroesse, ist_unterrezept, verkaufspreis_netto } = req.body ?? {};
+
+    if (!name) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'Recipe name is required.');
+    }
+
+    const recipe: RezeptRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      name: String(name),
+      portionsgroesse: Number(portionsgroesse ?? 1),
+      ist_unterrezept: Boolean(ist_unterrezept),
+      verkaufspreis_netto: verkaufspreis_netto === undefined ? null : Number(verkaufspreis_netto),
+      aktualisiert_am: new Date().toISOString(),
+    };
+
+    const tenantRecipes = getTenantRezepte(req.user!.betriebId);
+    stores.rezepte.set(req.user!.betriebId, [...tenantRecipes, recipe]);
+
+    return res.status(201).json({ recipe });
+  });
+
+  app.put('/rezepte/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const current = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!current) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const updated: RezeptRecord = {
+      ...current,
+      ...req.body,
+      id: current.id,
+      betriebId: req.user!.betriebId,
+      aktualisiert_am: new Date().toISOString(),
+    };
+
+    stores.rezepte.set(
+      req.user!.betriebId,
+      getTenantRezepte(req.user!.betriebId).map((item) => (item.id === current.id ? updated : item)),
+    );
+
+    return res.json({ recipe: updated });
+  });
+
+  app.delete('/rezepte/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const tenantRecipes = getTenantRezepte(req.user!.betriebId);
+    const recipe = tenantRecipes.find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    stores.rezepte.set(
+      req.user!.betriebId,
+      tenantRecipes.filter((item) => item.id !== rezeptId),
+    );
+
+    const recipeLines = stores.rezeptZutaten.get(req.user!.betriebId) ?? [];
+    stores.rezeptZutaten.set(
+      req.user!.betriebId,
+      recipeLines.filter((line) => line.rezeptId !== rezeptId),
+    );
+
+    return res.json({ deleted: true, recipeId: rezeptId });
+  });
+
+  app.post('/rezepte/:id/zutaten', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const { zutatId, unterrezeptId, menge, verschnitt_pct, garverlust_pct, schwund_pct } = req.body ?? {};
+
+    if (!zutatId && !unterrezeptId) {
+      return errorResponse(res, 400, 'INVALID_INPUT', 'A ingredient or subrecipe reference is required.');
+    }
+
+    const line: RezeptZutatRecord = {
+      id: createId(),
+      betriebId: req.user!.betriebId,
+      rezeptId,
+      zutatId: zutatId ?? null,
+      unterrezeptId: unterrezeptId ?? null,
+      menge: Number(menge ?? 0),
+      verschnitt_pct: Number(verschnitt_pct ?? 0),
+      garverlust_pct: Number(garverlust_pct ?? 0),
+      schwund_pct: Number(schwund_pct ?? 0),
+    };
+
+    const existing = stores.rezeptZutaten.get(req.user!.betriebId) ?? [];
+    stores.rezeptZutaten.set(req.user!.betriebId, [...existing, line]);
+
+    return res.status(201).json({ line });
+  });
+
+  app.put('/rezepte/:id/zutaten/:zid', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const zutatId = Array.isArray(req.params.zid) ? req.params.zid[0] : req.params.zid;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const lines = (stores.rezeptZutaten.get(req.user!.betriebId) ?? []).map((line) => {
+      if (line.id === zutatId && line.rezeptId === rezeptId) {
+        return {
+          ...line,
+          ...req.body,
+          id: line.id,
+          betriebId: req.user!.betriebId,
+          rezeptId,
+        };
+      }
+
+      return line;
+    });
+
+    const target = lines.find((line) => line.id === zutatId && line.rezeptId === rezeptId);
+
+    if (!target) {
+      return errorResponse(res, 404, 'REZEPT_ZUTAT_NOT_FOUND', 'The requested recipe ingredient entry was not found.');
+    }
+
+    stores.rezeptZutaten.set(req.user!.betriebId, lines);
+    return res.json({ line: target });
+  });
+
+  app.delete('/rezepte/:id/zutaten/:zid', requireAuth, (req: AuthenticatedRequest, res: Response) => {
+    const rezeptId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    const zutatId = Array.isArray(req.params.zid) ? req.params.zid[0] : req.params.zid;
+    const recipe = getTenantRezepte(req.user!.betriebId).find((item) => item.id === rezeptId);
+
+    if (!recipe) {
+      return errorResponse(res, 404, 'REZEPT_NOT_FOUND', 'The requested recipe was not found for this tenant.');
+    }
+
+    const lines = (stores.rezeptZutaten.get(req.user!.betriebId) ?? []).filter(
+      (line) => !(line.id === zutatId && line.rezeptId === rezeptId),
+    );
+
+    stores.rezeptZutaten.set(req.user!.betriebId, lines);
+    return res.json({ deleted: true, lineId: zutatId });
   });
 
   app.get('/zutaten/:id', requireAuth, (req: AuthenticatedRequest, res: Response) => {
