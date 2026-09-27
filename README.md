@@ -18,6 +18,18 @@ The MVP pricing function implements the requested pure business-logic flow:
 - fixed-cost allocation from the latest monthly sales volume
 - per-channel price calculation with target DB quote and additional sales fees
 
+## Auth and tenant isolation
+
+Step 2 from the handoff is implemented as a minimal backend layer for authentication and business-bound authorization:
+
+- `POST /auth/register` creates a tenant and a user
+- `POST /auth/login` issues a JWT for the user
+- `GET /auth/me` returns the authenticated session user
+- `GET /betrieb/:betriebId/zutaten` is protected by `requireAuth` and `requireTenantAccess`
+- tenant filtering is enforced server-side with a strict business-ID check before returning data
+
+This follows the requirement that no query may trust the client to decide the tenant scope. The server checks the JWT session and denies access if the business context does not match.
+
 ## Run locally
 
 ```bash
@@ -27,4 +39,4 @@ npm test
 
 ## Notes
 
-This is intentionally a pure backend logic layer without any database calls or HTTP bindings, so it can be unit-tested in isolation exactly as required by the handoff.
+The project now includes both the pure backend pricing logic and the auth/tenant layer needed for the MVP foundation.
